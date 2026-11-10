@@ -1,4 +1,6 @@
 """Browser entry points reject invalid scalar and lossy integer protocols."""
+import json
+
 import numpy as np
 import pytest
 
@@ -9,8 +11,8 @@ from .test_web_state_contract import bridge
 
 
 def vector_request(repeat):
-    return {"atoms":[{"position":[0,0],"grain":0,"half_indices":[0,0,0]},
-                     {"position":[1,0],"grain":0,"half_indices":[2,0,0]}],
+    return {"atoms":[{"position":[0,0],"grain":0,"layer":0,"half_indices":[0,0,0]},
+                     {"position":[1,0],"grain":0,"layer":0,"half_indices":[2,0,0]}],
             "lattice":"FCC","axis":"110","angle":22,
             "deformations":[np.eye(2).tolist(),np.eye(2).tolist()],"axial_repeat":repeat}
 
@@ -88,3 +90,44 @@ def test_cell_restore_rejects_fractional_and_unsafe_identity_values(bridge):
     cell["m1"][0][0]=2**53+1
     with pytest.raises(ValueError,match="safe integer"):
         bridge._from_cell(cell,"SC","100")
+
+
+def test_vector_reports_shared_readout_lines_and_in_plane_components(bridge):
+    request = vector_request(0)
+    request["atoms"][1] = {"position":[1,.5],"grain":0,"layer":1,"half_indices":[1,0,1]}
+    result = json.loads(bridge.web_dispatch(json.dumps({"action":"vector", **request})))
+    assert result["split"] is True and result["cross_grain"] is False
+    assert result["displacement"][2] == pytest.approx(np.sqrt(2)/4)
+    assert result["in_plane_length"] == pytest.approx(np.hypot(1, .5))
+    assert [line["grain"] for line in result["lines"]] == [None, 0, 0, None]
+    texts = [line["text"] for line in result["lines"]]
+    assert texts[0] == "Crystal P1→P2 · G1-A → G1-B · axial +0"
+    assert texts[1].startswith("G1 current (polar) · full: ")
+    assert texts[2].startswith("G1 current (polar) · in-plane: ")
+    assert texts[3] == "Current |Δr|/a₀ = 1.1726 · in-plane |Δxy|/a₀ = 1.1180 · Δz/a₀ = +0.3536"
+    grain = result["vectors"]["G1"]
+    axis = np.array([1, 1, 0]) / np.sqrt(2)
+    full = np.array(grain["current"])
+    np.testing.assert_allclose(grain["in_plane"]["current"], full - (full @ axis) * axis, atol=1e-12)
+    assert grain["in_plane"]["current_formatted"] in texts[2]
+    assert grain["current_formatted"] in texts[1]
+    # The browser appends the displayed x/y line itself; the bridge never adds it.
+    assert not any(text.startswith("View") for text in texts)
+
+
+def test_cross_grain_vector_tags_lines_with_both_grains(bridge):
+    request = vector_request(0)
+    request["atoms"][1] = {"position":[1,0],"grain":1,"layer":0,"half_indices":[1,-1,0]}
+    result = bridge._vector(request)
+    assert result["cross_grain"] is True and result["split"] is False
+    assert [line["grain"] for line in result["lines"]] == [None, 0, 1, None]
+    assert result["lines"][0]["text"] == "Cross-grain P1→P2 · G1-A → G2-A · axial +0"
+    assert set(result["vectors"]) == {"G1", "G2"}
+    assert "in-plane" not in json.dumps(result["lines"], ensure_ascii=False)
+
+
+def test_vector_rejects_atoms_without_a_layer_with_a_clear_error(bridge):
+    request = vector_request(0)
+    del request["atoms"][1]["layer"]
+    with pytest.raises(ValueError, match="layer"):
+        bridge._vector(request)

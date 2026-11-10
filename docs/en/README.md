@@ -172,7 +172,7 @@ the complete selected polygons, so the two totals answer different questions.
 | Teal dashed outline | Automatic common periodic cell, when enabled and available |
 | Arrows in each grain's selected color at the lower left | Perpendicular in-plane grain reference directions, labeled `[uvw]` |
 | B1–B2 and a dark line | Picked GB reference and its left/right sides |
-| P1–P2 and a purple arrow | Measured vector |
+| P1–P2 labels in their grains' colors and a purple arrow | Measured vector |
 | C1–C4 and outlines in the selected grain colors | Manual-cell vertices and the separate G1/G2 polygons |
 
 The legend follows enabled layers and overlays. It shows at most six enabled
@@ -443,8 +443,16 @@ another, press `V`, then `Esc`. `Esc` alone leaves the existing points in place.
 | --- | --- |
 | `G1/G2 current (polar)` | Actual displacement in the grain's orthonormal cubic frame, following its rigid rotation; includes strain-induced length and direction changes |
 | `G1/G2 lattice [uvw]` | When strain is present, coefficients in the grain's deformed conventional lattice basis; these may stay unchanged for the same atom pair within a grain |
-| `Current \|Δr\|/a₀` | Current three-dimensional vector length |
+| `· full` / `· in-plane` | When P1 and P2 differ in height, each line above splits into the complete 3D vector and its in-plane component `(Δx, Δy, 0)`, in the same frame and units |
+| `Current \|Δr\|/a₀` | Current three-dimensional vector length; with different heights, also the in-plane length `\|Δxy\|/a₀` and the axial component `Δz/a₀` |
 | `View Δxy/a₀` | For cross-grain measurements, components in the displayed projection |
+
+Lines that describe one grain, and the P1/P2 labels, use that grain's current
+color; changing a color in `APPEARANCE` recolors an existing measurement.
+Endpoints on one layer with axial image 0 show a single representation per
+grain. Different layers, or a nonzero `P2 axial periodic image`, give the
+vector an axial component, so the full vector and its in-plane component are
+listed separately, including their `[uvw]` forms.
 
 The `current` components and physical lengths are normalized by the reference
 a₀; `lattice [uvw]` entries are dimensionless coefficients in the deformed

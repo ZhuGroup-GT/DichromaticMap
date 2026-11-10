@@ -118,3 +118,101 @@ class VectorPhysicsTests(unittest.TestCase):
         for deformation in (np.zeros((2, 2)), np.diag([-1, 1]), [[1, 0], [0, np.nan]]):
             with self.assertRaises(ValueError):
                 crystal.crystal_vector_coordinates([1, 2, 3], 0, deformation)
+
+
+class ReadoutTests(unittest.TestCase):
+    """Shared P1→P2 readout lines used by the desktop window and the browser."""
+
+    def measure(self, second_position=(1.0, 0.5), second_half=(1, 0, 1), second_layer=1,
+                second_grain=0, axial_repeat=0, deformations=None, lattice="FCC", axis="110",
+                scale=1.0):
+        from dichromatic_map.state import SelectedAtom
+        from dichromatic_map.vectors import measure_vector
+        first = SelectedAtom(np.zeros(2), 0, 0, np.zeros(3, dtype=int))
+        second = SelectedAtom(np.array(second_position, dtype=float), second_grain,
+                              second_layer, np.array(second_half))
+        return measure_vector(crystal.bicrystal(lattice, axis, scale), first, second, 22.0,
+                              deformations or (np.eye(2), np.eye(2)), axial_repeat)
+
+    def test_same_height_endpoints_keep_a_single_representation(self):
+        from dichromatic_map.vectors import readout_text, vector_readout_lines
+        measured = self.measure((1.0, 0.0), (1, -1, 0), 0)
+        self.assertFalse(measured.split)
+        lines = vector_readout_lines(measured, display_rotation_deg=0.0)
+        self.assertEqual([line.grain for line in lines], [None, 0, None])
+        self.assertEqual(lines[0].text, "Crystal P1→P2 · G1-A → G1-A · axial +0")
+        self.assertTrue(lines[1].text.startswith("G1 current (polar): "))
+        self.assertEqual(lines[2].text, "Current |Δr|/a₀ = 1.0000")
+        self.assertNotIn("in-plane", readout_text(lines))
+        self.assertEqual(readout_text(lines), "\n".join(line.text for line in lines))
+
+    def test_different_heights_list_full_and_in_plane_components(self):
+        from dichromatic_map.vectors import vector_readout_lines
+        measured = self.measure()
+        self.assertTrue(measured.split)
+        np.testing.assert_allclose(measured.displacement, [1, .5, np.sqrt(2) / 4], atol=1e-12)
+        (_, full), = measured.full
+        (_, planar), = measured.in_plane
+        # The in-plane part removes the component along the cubic tilt axis [110].
+        axis = np.array([1, 1, 0]) / np.sqrt(2)
+        np.testing.assert_allclose(planar.current, full.current - (full.current @ axis) * axis, atol=1e-12)
+        np.testing.assert_allclose(planar.lattice, planar.current, atol=1e-12)
+        self.assertAlmostEqual(np.linalg.norm(planar.current), measured.in_plane_length, places=12)
+        self.assertAlmostEqual(measured.in_plane_length, np.hypot(1, .5), places=12)
+        lines = vector_readout_lines(measured)
+        self.assertEqual([line.grain for line in lines], [None, 0, 0, None])
+        self.assertEqual(lines[0].text, "Crystal P1→P2 · G1-A → G1-B · axial +0")
+        self.assertEqual(lines[1].text, "G1 current (polar) · full: "
+                         + crystal.format_direction_components(full.current))
+        self.assertEqual(lines[2].text, "G1 current (polar) · in-plane: "
+                         + crystal.format_direction_components(planar.current))
+        self.assertEqual(lines[3].text,
+                         "Current |Δr|/a₀ = 1.1726 · in-plane |Δxy|/a₀ = 1.1180 · Δz/a₀ = +0.3536")
+
+    def test_axial_image_alone_splits_the_readout(self):
+        from dichromatic_map.vectors import vector_readout_lines
+        measured = self.measure((1.0, 0.0), (1, -1, 0), 0, axial_repeat=-1)
+        self.assertTrue(measured.split)
+        lines = vector_readout_lines(measured)
+        self.assertEqual(lines[0].text, "Crystal P1→P2 · G1-A → G1-A · axial -1")
+        (_, planar), = measured.in_plane
+        self.assertEqual(lines[2].text, "G1 current (polar) · in-plane: "
+                         + crystal.format_direction_components(planar.current))
+        np.testing.assert_allclose(planar.current_frame @ planar.current, [1, 0, 0], atol=1e-12)
+        self.assertIn("in-plane |Δxy|/a₀ = 1.0000 · Δz/a₀ = -0.7071", lines[-1].text)
+
+    def test_cross_grain_readout_tags_each_grain_and_adds_displayed_components(self):
+        from dichromatic_map.vectors import vector_readout_lines
+        strained = rotation(0.5) @ np.array([[1.02, 0.01], [0.01, 0.99]])
+        measured = self.measure(second_grain=1, deformations=(np.eye(2), strained))
+        self.assertTrue(measured.cross_grain and measured.strained)
+        self.assertEqual([grain for grain, _ in measured.full], [0, 1])
+        lines = vector_readout_lines(measured, display_rotation_deg=90.0)
+        self.assertEqual([line.grain for line in lines], [None, 0, 0, 1, 1, 0, 0, 1, 1, None, None])
+        self.assertEqual(lines[0].text, "Cross-grain P1→P2 · G1-A → G2-B · axial +0")
+        self.assertTrue(lines[3].text.startswith("G2 current (polar) · full: "))
+        self.assertTrue(lines[5].text.startswith("G1 lattice [uvw] · full: "))
+        self.assertTrue(lines[6].text.startswith("G1 lattice [uvw] · in-plane: "))
+        self.assertTrue(lines[8].text.startswith("G2 lattice [uvw] · in-plane: "))
+        self.assertEqual(lines[-1].text, "View Δxy/a₀ = (-0.5000, 1.0000)")
+        without_view = vector_readout_lines(measured)
+        self.assertEqual([line.text for line in without_view], [line.text for line in lines[:-1]])
+        # Each grain's in-plane part is the same physical (x, y, 0) vector in its own frame.
+        for (_, full), (_, planar) in zip(measured.full, measured.in_plane):
+            np.testing.assert_allclose(planar.current_frame @ planar.current,
+                                       np.r_[measured.displacement[:2], 0], atol=1e-12)
+            np.testing.assert_allclose(planar.lattice_basis @ planar.lattice,
+                                       np.r_[measured.displacement[:2], 0], atol=1e-12)
+            self.assertGreater(np.linalg.norm(full.current - planar.current), 0.1)
+
+    def test_heterophase_second_grain_uses_its_own_lattice_constant_unit(self):
+        from dichromatic_map.vectors import vector_readout_lines
+        measured = self.measure(second_grain=1, second_half=(1, 1, 1), second_layer=0,
+                                lattice=("FCC", "BCC"), axis=("110", "111"), scale=0.8)
+        self.assertTrue(measured.split)
+        lines = vector_readout_lines(measured)
+        g2 = [line.text for line in lines if line.grain == 1]
+        self.assertEqual(len(g2), 2)
+        self.assertTrue(g2[0].startswith("G2 current (polar) · full: "))
+        self.assertTrue(all("a₀(G2)[" in text for text in g2), g2)
+        self.assertTrue(all("a₀(G2)" not in line.text for line in lines if line.grain == 0))

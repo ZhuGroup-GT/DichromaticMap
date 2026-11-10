@@ -677,3 +677,45 @@ def test_axis_change_discards_pending_selected_strain_results(gui, local_diamond
     assert window.compute.worker_count == 2
     # This small interactive request is intentionally handled by threads.
     assert window.compute.worker_process_ids == {os.getpid()}
+
+
+def test_vector_readout_splits_full_and_in_plane_components_across_layers(gui):
+    window = gui.window(lattice="BCC", axis="100", angle_deg=37)
+    controls, state, plot = window.controls, window.state, window.plot
+    grain = state.grains[0]
+
+    def pick(layer, target):
+        gui.select_layer(window, layer, grains=(0,))
+        candidates = grain.positions[grain.layers == layer]
+        gui.click_plot(window, candidates[np.argmin(np.linalg.norm(candidates - target, axis=1))])
+
+    controls.vector_button.click()
+    pick(0, [-1, -1])
+    assert plot.vector_labels[0].isVisible() and not plot.vector_labels[1].isVisible()
+    pick(1, [1, 1])
+    assert [atom.layer for atom in state.selected_atoms] == [0, 1]
+    displacement = window._selected_vector_displacement()
+    assert abs(displacement[2]) == pytest.approx(0.5)
+    text = plot.vector_annotation.toPlainText()
+    assert text == window._selected_vector_readout()
+    assert "G1 current (polar) · full: " in text
+    assert "G1 current (polar) · in-plane: " in text
+    assert f"in-plane |Δxy|/a₀ = {np.hypot(*displacement[:2]):.4f}" in text
+    assert f"Δz/a₀ = {displacement[2]:+.4f}" in text
+    (_, full), = window._selected_crystal_vectors()
+    (_, planar), = window._measured_vector().in_plane
+    # BCC [100]: the tilt axis is cubic x, so the in-plane part drops that component.
+    np.testing.assert_allclose(planar.current, [0, full.current[1], full.current[2]], atol=1e-12)
+    np.testing.assert_allclose(full.current[0], displacement[2], atol=1e-12)
+
+    # Same-height endpoints collapse to one representation; an axial image splits again.
+    controls.vector_button.click()
+    pick(1, [-1, -1])
+    pick(1, [1, 1])
+    text = plot.vector_annotation.toPlainText()
+    assert "G1 current (polar): " in text
+    assert "in-plane" not in text and "Δz" not in text
+    controls.axial_spin.setValue(1)
+    text = plot.vector_annotation.toPlainText()
+    assert "G1 current (polar) · in-plane: " in text
+    assert "Δz/a₀ = +1.0000" in text

@@ -16,10 +16,11 @@ from dichromatic_map.appearance import default_layer_symbols
 from dichromatic_map.cells import StrainedCell, checked_integer_array, count_cell_atoms
 from dichromatic_map.completion import cell_completion_candidates
 from dichromatic_map.crystal import (
-    CSLPreset, angle_presets, axial_displacement, bicrystal, crystal_vector_coordinates,
+    CSLPreset, angle_presets, bicrystal,
     format_direction_components, in_plane_reference_axes, in_plane_reference_directions,
     matching_angle_preset, misorientation_range, projected_columns,
 )
+from dichromatic_map.vectors import measure_vector, vector_readout_lines
 from dichromatic_map.matching import (
     exact_csl_cell, local_near_pairs, projected_coincidence_sites, projected_near_pairs,
     same_layer_coincidence_sites,
@@ -389,32 +390,47 @@ def _fit_selected(request):
 def _vector(request):
     a, b = request["atoms"]
     crystal = _crystal(request)
+    axial_repeat = _axial_repeat(request["axial_repeat"])
     for atom in (a, b):
         _safe_integer_values(atom["half_indices"])
-    dz = axial_displacement(
-        crystal, int(a["grain"]), checked_integer_array(a["half_indices"]),
-        int(b["grain"]), checked_integer_array(b["half_indices"]),
-        _axial_repeat(request["axial_repeat"]),
+        if "layer" not in atom:
+            # The readout names each endpoint's layer, as the session format does.
+            raise ValueError("Selected atoms need a grain, layer, position and half-indices")
+    first, second = (
+        SelectedAtom(_array(atom["position"]), int(atom["grain"]), int(atom["layer"]),
+                     checked_integer_array(atom["half_indices"]))
+        for atom in (a, b)
     )
-    displacement = np.r_[np.asarray(b["position"]) - np.asarray(a["position"]), dz]
-    grains = (0, 1) if a["grain"] != b["grain"] else (a["grain"],)
-    vectors = {}
-    for grain in grains:
-        coordinates = crystal_vector_coordinates(
-            displacement, (1 - 2 * grain) * float(request["angle"]) / 2,
-            _array(request["deformations"][grain]), crystal.lattices[grain],
-            crystal.axes[grain], scale=crystal.scales[grain],
-        )
-        unit = "a₀" if grain == 0 or crystal.scale == 1.0 else "a₀(G2)"
-        vectors[f"G{grain + 1}"] = {
+    measured = measure_vector(
+        crystal, first, second, float(request["angle"]),
+        [_array(deformation) for deformation in request["deformations"]],
+        axial_repeat,
+    )
+
+    def representation(coordinates, unit):
+        return {
             "current": coordinates.current.tolist(),
             "lattice": coordinates.lattice.tolist(),
             "current_formatted": format_direction_components(coordinates.current, unit),
             "lattice_formatted": format_direction_components(coordinates.lattice, unit=""),
-            "strained": coordinates.strained,
         }
-    return {"displacement": displacement.tolist(),
-            "length": float(np.linalg.norm(displacement)), "vectors": vectors}
+
+    vectors = {}
+    for (grain, full), (_, planar) in zip(measured.full, measured.in_plane, strict=True):
+        unit = "a₀" if grain == 0 or crystal.scale == 1.0 else "a₀(G2)"
+        vectors[f"G{grain + 1}"] = {
+            **representation(full, unit),
+            "in_plane": representation(planar, unit),
+            "strained": full.strained,
+        }
+    # The browser colors grain-tagged lines and appends the displayed x/y
+    # components itself, since display rotation never reaches this bridge.
+    return {"displacement": measured.displacement.tolist(),
+            "length": measured.length, "in_plane_length": measured.in_plane_length,
+            "split": measured.split, "cross_grain": measured.cross_grain,
+            "vectors": vectors,
+            "lines": [{"text": line.text, "grain": line.grain}
+                      for line in vector_readout_lines(measured)]}
 
 
 def _state_from_browser(raw):

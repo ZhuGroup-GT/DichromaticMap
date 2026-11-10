@@ -6,9 +6,11 @@ const path = require("node:path");
 const renderData = require("./render_data.js");
 
 function harness() {
-  const nodes = new Map(), timers = new Map(), frames = new Map(), windowEvents = new Map(), messages = [], titles = [], textDraws = [];
+  const nodes = new Map(), timers = new Map(), frames = new Map(), windowEvents = new Map(), messages = [], titles = [], textDraws = [], textColors = [];
   let sequence = 0, exports = 0;
-  const context = new Proxy({fillText(text, x, y) { textDraws.push(text); if (y === 17) titles.push(text); }},
+  const context = new Proxy({fillText(text, x, y) {
+      textDraws.push(text); textColors.push({text, color:this.fillStyle}); if (y === 17) titles.push(text);
+    }},
     {get(target, key) { return target[key] ?? (() => {}); }});
   const node = id => {
     if (!nodes.has(id)) nodes.set(id, {id, value: "1", checked: false, style: {}, dataset: {},
@@ -49,7 +51,7 @@ function harness() {
         center:[0,0],width:100,height:100,...coverage}; viewSize();},
     };
   `,sandbox);
-  return {app:sandbox.app, node, messages, titles, textDraws, sandbox, windowEvents,
+  return {app:sandbox.app, node, messages, titles, textDraws, textColors, sandbox, windowEvents,
     get frameCount() {return frames.size;},
     flushFrame() {const pending=[...frames.values()]; frames.clear(); pending.forEach(fn => fn());},
     get exports() {return exports;},

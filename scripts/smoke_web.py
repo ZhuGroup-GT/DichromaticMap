@@ -48,6 +48,10 @@ vector = call("vector", atoms=[
 assert vector["length"] > 0
 assert not vector["vectors"]["G1"]["strained"]
 assert "[" in vector["vectors"]["G1"]["current_formatted"]
+assert vector["lines"][0]["text"].startswith("Crystal P1→P2 · G1-")
+assert {line["grain"] for line in vector["lines"]} == {None, 0}
+assert ("· in-plane: " in vector["lines"][2]["text"]) == vector["split"]
+assert "[" in vector["vectors"]["G1"]["in_plane"]["current_formatted"]
 local = call("render", lattice="FCC", axis="110", angle=22,
              width=12, height=9, center=[0, 0], local_matching=True, local_distance=0.1)
 assert local["local"] is not None

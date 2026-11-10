@@ -26,6 +26,7 @@ from ..crystal import (
     layer_name, rotation_matrix_2d,
     in_plane_reference_directions, in_plane_reference_axes,
 )
+from ..vectors import atom_name
 from ..state import BUFFER_FACTOR, VIEW_SCALE_MIN, VIEW_SCALE_MAX
 import pyqtgraph.exporters
 
@@ -393,7 +394,8 @@ class PatternPlot:
         self.refresh_marker_sizes()
         self._draw_manual_cell()
         self._update_local_overlay()
-        self._update_reference_axes()
+        # Recolors the reference axes, endpoint labels and readout lines.
+        self._draw_vector()
         self._rebuild_legend()
 
     def _rebuild_legend(self):
@@ -818,14 +820,24 @@ class PatternPlot:
 
     def _draw_vector(self) -> None:
         self._update_reference_axes()
-        if self.owner.state.selected_atoms:
-            points = np.array(
-                [atom.position for atom in self.owner.state.selected_atoms]
+        atoms = self.owner.state.selected_atoms
+        if atoms:
+            self._set_scatter(
+                self.vector_endpoint_item, np.array([atom.position for atom in atoms])
             )
-            self._set_scatter(self.vector_endpoint_item, points)
-            for label, point in zip(self.vector_labels, self._to_view(points)):
-                label.setPos(*point)
-        if len(self.owner.state.selected_atoms) != 2:
+        # Each endpoint label takes the color of the grain it was picked from.
+        for index, label in enumerate(self.vector_labels):
+            if index >= len(atoms):
+                label.hide()
+                continue
+            atom = atoms[index]
+            label.setText(
+                f"P{index + 1}  {atom_name(atom)}",
+                color=self.owner.state.grain_colors[atom.grain_index],
+            )
+            label.setPos(*self._to_view(atom.position))
+            label.show()
+        if len(atoms) != 2:
             return
         first = self._to_view(self.owner.state.selected_atoms[0].position)
         second = self._to_view(self.owner.state.selected_atoms[1].position)
@@ -856,7 +868,7 @@ class PatternPlot:
         )
         self.vector_arrow.setPolygon(polygon)
         self.vector_arrow.show()
-        self.vector_annotation.setText(self.owner._selected_vector_readout())
+        self.vector_annotation.setHtml(self.owner._selected_vector_readout_html())
         self.vector_annotation.show()
         self._position_vector_annotation()
         self.owner._request_vector_annotation_repaint()

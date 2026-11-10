@@ -150,6 +150,11 @@ same-layer exact coincidences.
    annotation at the lower left of the plot, above the reference axes when
    they are enabled. Same-grain picks show that grain's
    coordinates; cross-grain picks show both G1 and G2 representations.
+   The P1/P2 labels and each grain's readout lines use that grain's color.
+   When P1 and P2 sit at different heights (different layers, or a nonzero
+   axial image), every representation lists the full vector and its in-plane
+   component separately, including the `[uvw]` forms, and the length line adds
+   the in-plane length and Δz.
    **P2 axial periodic image** selects an axial repeat for the second endpoint
    without adding plotted atoms.
 6. **Define a boundary.** Click **Pick GB** (`R`) and select B1, then B2.

@@ -20,6 +20,7 @@
 | [`appearance.py`](../../src/dichromatic_map/appearance.py) | 不依赖 Qt 的晶粒颜色、唯一符号标识、逐层大小比例、校验及层数调整 |
 | [`session.py`](../../src/dichromatic_map/session.py) | 版本化会话压缩文件、数据校验与原子写入 |
 | [`exports.py`](../../src/dichromatic_map/exports.py) | 重新计算并导出计数、向量和应变 CSV |
+| [`vectors.py`](../../src/dichromatic_map/vectors.py) | 桌面端与浏览器共用的 P1→P2 测量：位移、全量与面内晶粒坐标及读数行 |
 | [`ui/session.py`](../../src/dichromatic_map/ui/session.py) | 文件对话框、控件同步与会话恢复 |
 | [`ui/window.py`](../../src/dichromatic_map/ui/window.py) | 用户操作、状态转换、拾取和结果更新 |
 | [`ui/plot.py`](../../src/dichromatic_map/ui/plot.py) | 显示变换、绘图缓存、标注和 PNG 导出 |
@@ -406,8 +407,9 @@ p = p₀ + u(p₁ − p₀) + v(p₃ − p₀),     0 ≤ u,v < 1.
 
 ### 9.2 一个实际向量的两种晶粒表示
 
-实现见 [`crystal_vector_coordinates`](../../src/dichromatic_map/crystal.py) 和
-[`_selected_vector_displacement`](../../src/dichromatic_map/ui/window.py)。
+实现见 [`crystal_vector_coordinates`](../../src/dichromatic_map/crystal.py)，以及
+[`vectors.py`](../../src/dichromatic_map/vectors.py) 中的 `measure_vector` 与 `vector_readout_lines`；
+后者由 [`ui/window.py`](../../src/dichromatic_map/ui/window.py) 的选点流程和浏览器桥接的 `vector` 动作共用。
 实际归一化位移 **d**ₐ 的 x/y 分量来自两个当前原子位置之差；
 z 分量来自两端 `half_indices` 的轴向投影，并加上 P2 所选轴向周期像。
 该周期像由整数参数指定，不自动选择最短距离的周期像。
@@ -427,6 +429,12 @@ lattice = solve(B_g, d_a).
 `lattice` 是同一向量在变形后的常规晶格基矢中的系数。
 这里 **d**ₐ 已用 a₀ 归一化，公式无需再次除以 a₀，也不再次对位移施加变形。
 这些表示描述直接晶格方向 `[uvw]`，不计算倒易晶面指标 `(hkl)`。
+
+面内分量 **d**∥ = (d_x, d_y, 0) 用同一组 O_g、B_g 表示。当 `|d_z| > 1e-9`（两端点位于不同层，
+或轴向周期像不为 0）时，读数对每种表示分别列出 `full`（全量）和 `in-plane`（面内）两行，
+含各自的 `[uvw]` 形式，长度行同时给出 `|Δxy|` 与 `Δz`；否则全量向量即位于面内，只列一行。
+`vector_readout_lines` 为桌面端与浏览器生成完全相同的读数行；标记了晶粒的行与 P1/P2 标签
+均使用该晶粒当前颜色。跨晶粒的 `View Δxy` 行由浏览器自行附加，因为显示旋转不会传给桥接层。
 
 简单有理分量仅在全部分量误差 ≤10⁻¹⁰、公共分母 ≤48、约分后方向指标绝对值 ≤256 时
 格式化为保留长度的整数/分数方向；否则显示近似实数分量。
@@ -477,6 +485,7 @@ v_g,i = R_display R_polar(F_g) R(φ_g) e_i
 所选四对顶点的矩阵拟合规模很小，直接同步执行。
 逐层匹配按层组提交，每组只传递自己需要的图层，避免反复传输完整晶粒。
 如果存在 `threadpoolctl`，进程初始化将内部 BLAS 线程数限制为 1，减少嵌套并行。
+线程任务共用一个临时限制，最后一个任务结束时恢复调用方的设置，并释放 threadpoolctl 对 OpenBLAS 的线程归属，嵌入程序随后仍能在自己的线程中配置 NumPy。
 
 `NearSearch` 把准备阶段与胞求解阶段分开，求解任务每次处理上三角候选对的八行，
 只构造该任务负责的索引，并限制同时在途的任务数。

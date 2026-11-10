@@ -38,6 +38,31 @@ def _blas_controller():
     return ThreadpoolController()
 
 
+def _release_blas_control(controller):
+    """Let any thread adjust OpenBLAS's shared pool again.
+
+    threadpoolctl 3.8 hands OpenBLAS's process-wide thread count to the first
+    live thread that sets a limit and silently ignores every other thread. The
+    shared limit is set and restored by whichever pooled task thread runs
+    first or last, and an embedding program must stay able to configure NumPy
+    from its own thread afterwards, so no task thread keeps that ownership.
+    """
+    for library in getattr(controller, "lib_controllers", ()):
+        clear = getattr(type(library), "clear_controlling_thread", None)
+        if clear is not None:
+            clear(force=True)
+            return
+
+
+def _adjust_blas(controller, adjust):
+    """Apply a process-wide BLAS change from whichever task thread needs it."""
+    _release_blas_control(controller)
+    try:
+        return adjust()
+    finally:
+        _release_blas_control(controller)
+
+
 class _SharedBlasLimit:
     """Coordinate the process-wide BLAS setting across numerical tasks.
 
@@ -63,7 +88,10 @@ class _SharedBlasLimit:
             if self._users == 0 and self._controller is not None:
                 # Cache library discovery; short solve chunks only adjust the
                 # already loaded BLAS libraries, rather than scanning each time.
-                self._limit = self._controller.limit(limits=1, user_api="blas")
+                self._limit = _adjust_blas(
+                    self._controller,
+                    lambda: self._controller.limit(limits=1, user_api="blas"),
+                )
             self._users += 1
         try:
             yield
@@ -72,7 +100,7 @@ class _SharedBlasLimit:
                 self._users -= 1
                 if self._users == 0 and self._limit is not None:
                     limit, self._limit = self._limit, None
-                    limit.restore_original_limits()
+                    _adjust_blas(self._controller, limit.restore_original_limits)
 
 
 _thread_blas_limit = _SharedBlasLimit()

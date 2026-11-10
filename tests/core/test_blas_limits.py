@@ -243,3 +243,48 @@ def test_real_blas_limit_restores_external_configuration_and_scientific_results(
         session.close()
         executor.shutdown(wait=True, cancel_futures=True)
         strain.clear_strain_caches()
+
+
+def test_shared_limit_leaves_no_task_thread_owning_the_blas_pool(monkeypatch):
+    """threadpoolctl 3.8 ignores limits from every thread but the first live one that set one.
+
+    The shared limit must still take effect under an external limit, be restored by a
+    different pooled thread than the one that set it, and leave the caller's thread able
+    to configure BLAS while the task threads stay alive.
+    """
+    threadpoolctl = pytest.importorskip("threadpoolctl")
+
+    def blas_threads():
+        return {pool["num_threads"] for pool in threadpoolctl.threadpool_info() if pool["user_api"] == "blas"}
+
+    if not blas_threads():
+        pytest.skip("threadpoolctl exposes no supported BLAS library (for example, macOS Accelerate)")
+    monkeypatch.setattr(compute, "_thread_blas_limit", compute._SharedBlasLimit())
+    started = [threading.Event(), threading.Event()]
+    release = [threading.Event(), threading.Event()]
+
+    def task(index):
+        started[index].set()
+        assert release[index].wait(10)
+        return blas_threads()
+
+    with threadpoolctl.threadpool_limits(limits=2, user_api="blas"):
+        assert blas_threads() == {2}
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            try:
+                first = executor.submit(compute.run_numerical_task, task, 0)
+                assert started[0].wait(10)
+                second = executor.submit(compute.run_numerical_task, task, 1)
+                assert started[1].wait(10)
+                release[0].set()  # The thread that set the limit finishes first...
+                assert first.result(timeout=10) == {1}
+                assert blas_threads() == {1}
+                release[1].set()  # ...and the other pooled thread restores.
+                assert second.result(timeout=10) == {1}
+                assert blas_threads() == {2}
+                with threadpoolctl.threadpool_limits(limits=1, user_api="blas"):
+                    assert blas_threads() == {1}
+                assert blas_threads() == {2}
+            finally:
+                for event in release:
+                    event.set()

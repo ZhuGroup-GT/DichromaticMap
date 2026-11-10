@@ -7,7 +7,7 @@ pytest.importorskip("PySide6")
 pytest.importorskip("pyqtgraph")
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from dichromatic_map.ui import GRAIN_1_COLOR, GRAIN_1_EDGE, GRAIN_2_COLOR, LAYER_SYMBOLS
+from dichromatic_map.ui import GRAIN_1_COLOR, GRAIN_1_EDGE, GRAIN_2_COLOR, LAYER_SYMBOLS, VECTOR_COLOR
 from test_workflows import pick_exact_cell
 
 pytestmark = pytest.mark.gui
@@ -383,3 +383,39 @@ def test_large_symbols_fit_inside_legend_samples(gui):
         assert x.min() >= 40 and x.max() < 60
         assert y.min() >= 40 and y.max() < 60
         assert sample.item.opts["size"] == original_size
+
+
+def test_vector_labels_and_readout_follow_grain_colors(gui, monkeypatch):
+    window = gui.window(lattice="BCC", axis="100", angle_deg=37)
+    controls, state, plot = window.controls, window.state, window.plot
+    gui.select_layer(window, 0, grains=(0,))
+    controls.vector_button.click()
+    first = state.grains[0].positions[state.grains[0].layers == 0]
+    gui.click_plot(window, first[np.argmin(np.linalg.norm(first - [-1, -1], axis=1))])
+    assert plot.vector_labels[0].color.name() == GRAIN_1_COLOR
+    gui.select_layer(window, 0, grains=(1,))
+    second = state.grains[1].positions[state.grains[1].layers == 0]
+    gui.click_plot(window, second[np.argmin(np.linalg.norm(second - [1, 1], axis=1))])
+    assert [atom.grain_index for atom in state.selected_atoms] == [0, 1]
+    assert [label.color.name() for label in plot.vector_labels] == [GRAIN_1_COLOR, GRAIN_2_COLOR]
+    html_text = plot.vector_annotation.toHtml()
+    assert GRAIN_1_COLOR in html_text and GRAIN_2_COLOR in html_text
+
+    open_appearance(gui, window)
+    choose_color(monkeypatch, window, 0, "#7024bd")
+    choose_color(monkeypatch, window, 1, "#269244")
+    gui.settle(window)
+    assert [label.color.name() for label in plot.vector_labels] == ["#7024bd", "#269244"]
+    html_text = plot.vector_annotation.toHtml()
+    assert "#7024bd" in html_text and "#269244" in html_text
+    assert GRAIN_1_COLOR not in html_text and GRAIN_2_COLOR not in html_text
+    text = plot.vector_annotation.toPlainText()
+    assert text == window._selected_vector_readout()
+    assert "G1 current" in text and "G2 current" in text and "View Δxy/a₀" in text
+    # Lines that describe no single grain keep the vector annotation color.
+    assert VECTOR_COLOR in html_text
+
+    window.controls.appearance_reset_button.click()
+    gui.settle(window)
+    assert [label.color.name() for label in plot.vector_labels] == [GRAIN_1_COLOR, GRAIN_2_COLOR]
+    assert "#7024bd" not in plot.vector_annotation.toHtml()

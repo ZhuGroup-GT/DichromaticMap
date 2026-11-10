@@ -28,14 +28,18 @@ from .completion import CellCompletionDialog
 from ..completion import cell_completion_candidates
 from ..crystal import (
     CSLPreset,
-    axial_displacement,
     bicrystal,
     projected_columns,
     layer_name,
     GeometryLimitError,
     matching_angle_preset,
-    crystal_vector_coordinates,
-    format_direction_components,
+)
+from ..vectors import (
+    atom_name,
+    measure_vector,
+    readout_text,
+    selected_vector_displacement,
+    vector_readout_lines,
 )
 from ..cells import validate_cell_vertices, selected_region_mask
 from ..displacements import (
@@ -67,6 +71,7 @@ from ..compute import (
 from ..matching import projected_coincidence_sites, same_layer_coincidence_sites
 from .controls import ControlDock
 from .plot import PatternPlot
+from . import VECTOR_COLOR
 
 CITATION_DOI = "https://doi.org/10.48550/arXiv.2609.14673"
 CITATION_TEXT = (
@@ -2767,7 +2772,7 @@ class DichromaticPatternWindow(QtWidgets.QMainWindow):
 
     @staticmethod
     def _atom_name(atom: SelectedAtom) -> str:
-        return f"G{atom.grain_index + 1}-{layer_name(atom.layer)}"
+        return atom_name(atom)
 
     def _pick_boundary_atom(self, atom: SelectedAtom) -> None:
         if (
@@ -2801,18 +2806,11 @@ class DichromaticPatternWindow(QtWidgets.QMainWindow):
             self._update_status("Choose a different second atom.")
             return
         self.state.selected_atoms.append(atom)
-        points = np.asarray(
-            [selected.position for selected in self.state.selected_atoms]
-        )
-        self.plot._set_scatter(self.plot.vector_endpoint_item, points)
-        index = len(self.state.selected_atoms) - 1
-        label = self.plot.vector_labels[index]
-        label.setText(f"P{index + 1}  {self._atom_name(atom)}")
-        label.setPos(*self.plot._to_view(atom.position))
-        label.show()
         if len(self.state.selected_atoms) == 2:
             self._set_mode("idle")
-            self.plot._draw_vector()
+        # The plot labels every picked endpoint in its grain's color and draws
+        # the arrow with the readout once both endpoints exist.
+        self.plot._draw_vector()
         self._update_status()
 
     def _request_vector_annotation_repaint(self) -> None:
@@ -2854,70 +2852,46 @@ class DichromaticPatternWindow(QtWidgets.QMainWindow):
         indices = " ".join(str(int(component)) for component in direction)
         return f"{scale}[{indices}]"
 
-    def _selected_vector_readout(self) -> str:
+    def _measured_vector(self):
         if len(self.state.selected_atoms) != 2:
-            return ""
+            return None
         first, second = self.state.selected_atoms
-        cross_grain = first.grain_index != second.grain_index
-        displacement = self._selected_vector_displacement()
-        vectors = self._selected_crystal_vectors()
-        lines = [
-            f"{'Cross-grain' if cross_grain else 'Crystal'} P1→P2 · "
-            f"{self._atom_name(first)} → {self._atom_name(second)} · axial {self.state.axial_repeat:+d}"
-        ]
-        for grain, vector in vectors:
-            # Each grain's components use its own lattice constant.
-            unit = "a₀" if grain == 0 or self.state.crystal.scale == 1.0 else "a₀(G2)"
-            lines.append(
-                f"G{grain+1} current (polar): {format_direction_components(vector.current, unit)}"
-            )
-        # Material coordinates can stay integer while current spatial
-        # components change under strain. Keep these notions explicitly apart.
-        if any(vector.strained for _, vector in vectors):
-            for grain, vector in vectors:
-                lines.append(
-                    f"G{grain+1} lattice [uvw]: {format_direction_components(vector.lattice, unit='')}"
-                )
-        lines.append(f"Current |Δr|/a₀ = {np.linalg.norm(displacement):.4f}")
-        if cross_grain:
-            projected = self.plot._to_view(displacement[:2])
-            lines.append(f"View Δxy/a₀ = ({projected[0]:.4f}, {projected[1]:.4f})")
-        return "\n".join(lines)
+        return measure_vector(
+            self.state.crystal, first, second, self.state.angle_deg,
+            self.state.deformations, self.state.axial_repeat,
+        )
+
+    def _selected_vector_readout_lines(self):
+        """Shared readout lines; grain-tagged lines take that grain's color."""
+        measured = self._measured_vector()
+        if measured is None:
+            return []
+        return vector_readout_lines(
+            measured, display_rotation_deg=self.state.display_rotation_deg
+        )
+
+    def _selected_vector_readout(self) -> str:
+        return readout_text(self._selected_vector_readout_lines())
+
+    def _selected_vector_readout_html(self) -> str:
+        """One block per line, colored like the grain it describes."""
+        return "".join(
+            f'<div style="color:{self.state.grain_colors[line.grain] if line.grain is not None else VECTOR_COLOR}">'
+            f"{html.escape(line.text)}</div>"
+            for line in self._selected_vector_readout_lines()
+        )
 
     def _selected_vector_displacement(self):
         """Actual 3D displacement, including phase height and P2's periodic image."""
         first, second = self.state.selected_atoms
-        # Both grains share the tilt axis, even after their in-plane F and
-        # translations. Only z may be obtained from reference indices (each
-        # grain's own layer heights); x/y must come from actual atom positions.
-        dz = axial_displacement(
-            self.state.crystal, first.grain_index, first.half_indices,
-            second.grain_index, second.half_indices, self.state.axial_repeat,
+        return selected_vector_displacement(
+            self.state.crystal, first, second, self.state.axial_repeat
         )
-        return np.r_[second.position - first.position, dz]
 
     def _selected_crystal_vectors(self):
-        if len(self.state.selected_atoms) != 2:
-            return []
-        first, second = self.state.selected_atoms
-        grains = (
-            (0, 1) if first.grain_index != second.grain_index else (first.grain_index,)
-        )
-        displacement = self._selected_vector_displacement()
-        return [
-            (
-                grain,
-                crystal_vector_coordinates(
-                    displacement,
-                    (1 if grain == 0 else -1) * self.state.angle_deg / 2,
-                    self.state.deformations[grain],
-                    self.state.crystal.lattices[grain],
-                    self.state.crystal.axes[grain],
-                    scale=self.state.crystal.scales[grain],
-                ),
-            )
-            for grain in grains
-        ]
+        """Full-vector coordinates per reporting grain, as (grain, coordinates)."""
+        measured = self._measured_vector()
+        return [] if measured is None else list(measured.full)
 
     def _set_region_states(self, states: tuple[bool, bool, bool, bool]) -> None:
         blockers = [

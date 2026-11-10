@@ -766,7 +766,9 @@ function draw() {
   }
   if (state.atoms.length) {
     drawVector(ctx);
-    state.atoms.forEach((v, i) => { const [x, y] = screen(v.position); ctx.fillStyle = "#83419a"; ctx.fillText(`P${i + 1}`, x + 6, y - 7); });
+    // Each endpoint label takes the color of the grain it was picked from.
+    ctx.font = "bold 11px Arial";
+    state.atoms.forEach((v, i) => { const [x, y] = screen(v.position); ctx.fillStyle = state.colors[v.grain]; ctx.fillText(`P${i + 1}`, x + 6, y - 7); });
   }
   ctx.restore();
   ctx.strokeStyle = "#8498c0";
@@ -1525,25 +1527,40 @@ async function updateVector() {
   try {
     const result = await request("vector", token.inputs);
     if (!analysisCurrent(token)) return;
-    const text = [`P1→P2 · axial ${state.axialRepeat >= 0 ? "+" : ""}${state.axialRepeat}`];
-    const vectors = Object.entries(result.vectors);
-    for (const [grain, v] of vectors) {
-      text.push(`${grain} current (polar): ${v.current_formatted}`);
-    }
-    if (vectors.some(([, v]) => v.strained)) {
-      for (const [grain, v] of vectors) {
-        text.push(`${grain} lattice [uvw]: ${v.lattice_formatted}`);
-      }
-    }
-    text.push(`Current |Δr|/a₀ = ${result.length.toFixed(4)}`);
-    vectorReading = {signature:token.signature, text:text.join("\n")};
-    $("vector-readout").textContent = vectorReading.text;
+    // The bridge writes the same lines as the desktop app; full and in-plane
+    // components are listed separately when P1 and P2 differ in height.
+    vectorReading = {signature:token.signature, lines:result.lines ?? [],
+      displacement:result.displacement, crossGrain:Boolean(result.cross_grain)};
+    renderVectorReadout();
     $("vector-annotation").hidden = false;
     positionVectorAnnotation();
     setStatus("Vector measured");
   } catch (error) {
     if (analysisCurrent(token)) {pending.error=error; fail(error);}
   } finally {pending.finish();}
+}
+function vectorReadoutLines() {
+  if (!vectorReading) return [];
+  // Grain-tagged lines follow the current grain colors; the rest keep the panel color.
+  const lines = vectorReading.lines.map(line => ({text:line.text,
+    color:line.grain === 0 || line.grain === 1 ? state.colors[line.grain] : null}));
+  if (vectorReading.crossGrain && vectorReading.displacement) {
+    const [dx, dy] = rotate(vectorReading.displacement.slice(0, 2), state.displayRotation);
+    lines.push({text:`View Δxy/a₀ = (${dx.toFixed(4)}, ${dy.toFixed(4)})`, color:null});
+  }
+  return lines;
+}
+function renderVectorReadout() {
+  const lines = vectorReadoutLines();
+  $("vector-readout").replaceChildren(...lines.map((line, index) => {
+    const span = document.createElement("span");
+    span.textContent = index + 1 < lines.length ? `${line.text}\n` : line.text;
+    if (line.color) span.style.color = line.color;
+    return span;
+  }));
+}
+function refreshVectorReadout() {
+  if (!$("vector-annotation").hidden) renderVectorReadout();
 }
 
 async function waitForCurrentVector() {
@@ -1789,14 +1806,19 @@ async function exportPNG() {
     context.fillText($("plot-title").textContent, canvas.clientWidth / 2, 17);
     context.textAlign = "left";
     drawPlotLegend(context);
-    if (!$("vector-annotation").hidden) {
-      const lines = $("vector-readout").textContent.split("\n");
+    if (!$("vector-annotation").hidden && vectorReading) {
+      const lines = vectorReadoutLines();
       const lowerEdge = state.referenceAxes && pattern?.reference_axes && metadata?.reference_labels
         ? referenceAxesBounds(plotRect()).top - 10 : canvas.clientHeight - 42;
       const x = 48, y = lowerEdge - lines.length * 15 - 5;
-      context.fillStyle = "#fffffff0"; context.fillRect(x - 6, y - 15, 410, lines.length * 15 + 20);
-      context.fillStyle = "#293b59"; context.font = "11px monospace";
-      lines.forEach((line, i) => context.fillText(line, x, y + i * 15));
+      context.font = "11px monospace";
+      const measure = text => context.measureText?.(text)?.width ?? text.length * 6.6;
+      const width = Math.max(410, ...lines.map(line => measure(line.text) + 12));
+      context.fillStyle = "#fffffff0"; context.fillRect(x - 6, y - 15, width, lines.length * 15 + 20);
+      lines.forEach((line, i) => {
+        context.fillStyle = line.color || "#293b59";
+        context.fillText(line.text, x, y + i * 15);
+      });
     }
   }
   copy.toBlob(blob => {
@@ -1971,7 +1993,7 @@ window.addEventListener("pointerup", finishAngleDrag);
 window.addEventListener("pointercancel", finishAngleDrag);
 window.addEventListener("blur", finishAngleDrag);
 function rotationChanged(value) {
-  state.displayRotation = Number(value); updateSummary(); scheduleDraw(); renderRequest();
+  state.displayRotation = Number(value); updateSummary(); refreshVectorReadout(); scheduleDraw(); renderRequest();
 }
 $("rotation-number").addEventListener("change", () => rotationChanged($("rotation-number").value));
 $("rotation-slider").addEventListener("input", () => rotationChanged($("rotation-slider").value));
@@ -2048,8 +2070,8 @@ for (const id of ["plot-legend-panel", "vector-annotation"]) {
     if (panel.open && !event.target.closest("summary")) panel.open = false;
   });
 }
-$("g1-color").addEventListener("input", () => { state.colors[0] = $("g1-color").value; scheduleDraw(); });
-$("g2-color").addEventListener("input", () => { state.colors[1] = $("g2-color").value; scheduleDraw(); });
+$("g1-color").addEventListener("input", () => { state.colors[0] = $("g1-color").value; refreshVectorReadout(); scheduleDraw(); });
+$("g2-color").addEventListener("input", () => { state.colors[1] = $("g2-color").value; refreshVectorReadout(); scheduleDraw(); });
 $("lattice-constant").addEventListener("change", () => {
   const value = Number($("lattice-constant").value);
   if (Number.isFinite(value) && value > 0) state.a0 = value;
@@ -2059,7 +2081,7 @@ $("reset-appearance").addEventListener("click", () => {
   state.colors = ["#1677d2","#e35d35"]; state.symbols = metadata.symbols;
   state.sizes = Array(metadata.layers).fill(1);
   $("g1-color").value = state.colors[0]; $("g2-color").value = state.colors[1];
-  rebuildLayers(); draw();
+  refreshVectorReadout(); rebuildLayers(); draw();
 });
 $("near-method").addEventListener("change", () => {
   if (uniformStrainBlocked() && $("near-method").value === "strain") {

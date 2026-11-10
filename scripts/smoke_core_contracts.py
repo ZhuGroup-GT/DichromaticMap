@@ -78,8 +78,8 @@ def run_core_contracts(bridge=None):
         restored = bridge["_from_cell"](bridge["_cell"](cell), "SC", "100")
         assert restored.m1.dtype == np.dtype(np.int64), "browser restoration used platform-width integers"
         assert np.array_equal(restored.m1, matrix) and restored.atoms == cell.atoms
-        request = {"atoms":[{"position":[0,0],"grain":0,"half_indices":[0,0,0]},
-                            {"position":[1,0],"grain":0,"half_indices":[2,0,0]}],
+        request = {"atoms":[{"position":[0,0],"grain":0,"layer":0,"half_indices":[0,0,0]},
+                            {"position":[1,0],"grain":0,"layer":0,"half_indices":[2,0,0]}],
                    "lattice":"FCC", "axis":"110", "angle":22,
                    "deformations":[np.eye(2).tolist(),np.eye(2).tolist()], "axial_repeat":1.5}
         try:

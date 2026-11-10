@@ -19,6 +19,7 @@ point per row, so corresponding matrix operations use a transpose.
 | [appearance.py](../../src/dichromatic_map/appearance.py) | Qt-free grain colors, unique marker identifiers, per-layer size scales, validation and resizing |
 | [session.py](../../src/dichromatic_map/session.py) | Versioned session archive, validation and atomic persistence |
 | [exports.py](../../src/dichromatic_map/exports.py) | Recomputed count, vector and strain CSV tables |
+| [vectors.py](../../src/dichromatic_map/vectors.py) | Shared P1→P2 measurement: displacement, full and in-plane grain coordinates and readout lines |
 | [ui/session.py](../../src/dichromatic_map/ui/session.py) | File dialogs, control synchronization and session restoration |
 | [ui/window.py](../../src/dichromatic_map/ui/window.py) | Interaction, validation, task dispatch and result application |
 | [ui/plot.py](../../src/dichromatic_map/ui/plot.py) | Display transforms, buffered rendering, overlays and export |
@@ -478,8 +479,10 @@ unequal grain areas are kept separate. Polygon shape alone does not certify peri
 ### Vector coordinate representations
 
 Implementation: `crystal_vector_coordinates` and `format_direction_components` in
-[crystal.py](../../src/dichromatic_map/crystal.py), with endpoint selection in
-[ui/window.py](../../src/dichromatic_map/ui/window.py).
+[crystal.py](../../src/dichromatic_map/crystal.py); `measure_vector` and
+`vector_readout_lines` in [vectors.py](../../src/dichromatic_map/vectors.py), shared by
+endpoint selection in [ui/window.py](../../src/dichromatic_map/ui/window.py) and the
+browser bridge's `vector` action.
 
 The displacement `d` is built from current atom endpoints and is already divided by a₀.
 Its axial component includes the two layer heights and the selected periodic image of P2:
@@ -494,6 +497,15 @@ Let `Rpolar` be its polar rotation. Then:
 O = Rpolar Q            current = Oᵀ d
 B = F3 Q               lattice = solve(B, d).
 ```
+
+The in-plane component `d∥ = (d_x, d_y, 0)` is expressed with the same `O` and `B`. When
+`|d_z| > 1e-9` (different layers, or a nonzero axial image), the readout lists `full` and
+`in-plane` entries for every representation, including the `[uvw]` forms, and the length line
+adds `|Δxy|` and `Δz`; otherwise the full vector is in-plane and only one entry appears.
+`vector_readout_lines` returns identical lines for the desktop window and the browser; a line
+tagged with a grain is drawn in that grain's current color, as are the P1/P2 labels. The browser
+appends the displayed cross-grain `View Δxy` line itself, because display rotation does not reach
+the bridge.
 
 `current` contains physical displacement components in transported orthonormal cubic axes;
 `lattice` contains coefficients in the deformed conventional lattice basis. The displacement
@@ -570,8 +582,10 @@ process pool in the background; later large matches use it once ready. Warmup fa
 retain the thread path, and changing workers or closing the window cancels warmup.
 Matching jobs receive only their bounded group of layers,
 avoiding repeated full-grain transfers. If available, `threadpoolctl` restricts each
-process worker's internal BLAS pool to one thread. The small selected-cell fit
-remains synchronous.
+process worker's internal BLAS pool to one thread. Thread tasks share one temporary
+limit, restore the caller's setting after the last of them, and release threadpoolctl's
+OpenBLAS ownership so an embedding program can still configure NumPy from its own
+thread. The small selected-cell fit remains synchronous.
 
 `NearSearch` prepares candidates, then schedules eight starting rows of the upper-triangular
 vector-pair index set per job. At most the configured worker count is in flight. A generation

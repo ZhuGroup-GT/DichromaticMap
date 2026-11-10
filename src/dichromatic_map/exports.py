@@ -9,7 +9,8 @@ from types import SimpleNamespace
 import numpy as np
 
 from .cells import StrainedCell, count_cell_atoms
-from .crystal import axial_displacement, crystal_vector_coordinates, rotation_matrix_2d
+from .crystal import crystal_vector_coordinates, rotation_matrix_2d
+from .vectors import selected_vector_displacement
 from .displacements import normalize_grain_displacements
 from .matching import exact_csl_cell
 from .state import PatternState
@@ -113,13 +114,12 @@ def _vector_rows(state, a0):
         _finite_array(atom.half_indices, (3,), "Selected atom half-indices")
         if atom.grain_index not in (0, 1):
             raise ValueError("Selected atom grain must be G1 or G2")
-    dz = axial_displacement(
-        state.crystal, first.grain_index, first.half_indices,
-        second.grain_index, second.half_indices, state.axial_repeat,
+    # The same displacement as the on-plot readout, including P2's periodic image.
+    displacement = selected_vector_displacement(
+        state.crystal, first, second, state.axial_repeat
     )
-    displacement = np.r_[second.position - first.position, dz]
     view_displacement = np.r_[
-        rotation_matrix_2d(state.display_rotation_deg) @ displacement[:2], dz,
+        rotation_matrix_2d(state.display_rotation_deg) @ displacement[:2], displacement[2],
     ]
     metadata = (
         "P1_to_P2", f"G{first.grain_index + 1}", first.layer,

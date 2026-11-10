@@ -6,7 +6,8 @@ const {harness, fixture} = require("./state_consistency.test.js");
 const identity = () => [[[1,0],[0,1]],[[1,0],[0,1]]];
 const metadata = {lattice:"FCC",axis:"110",layers:1,max_angle:90,default_angle:fixture().angle,
   presets:[{name:"Σ9",angle:fixture().angle,label:"Σ9"}],reference_labels:[],layer_spacing:1,axial_period:1};
-const vector = repeat => ({vectors:{G1:{current_formatted:`repeat-${repeat}`,strained:false}},length:repeat+1});
+const vector = repeat => ({lines:[{text:`P1→P2 · axial ${repeat >= 0 ? "+" : ""}${repeat}`,grain:null},
+  {text:`G1 current (polar): repeat-${repeat}`,grain:0}],displacement:[1,0,0],length:repeat+1,cross_grain:false});
 const atoms = () => [{position:[0,0],grain:0,layer:0,half_indices:[0,0,0]},
   {position:[1,0],grain:0,layer:0,half_indices:[2,0,0]}];
 
@@ -69,4 +70,53 @@ test("a failed current vector cannot export an older readout", async () => {
   h.node("axial-repeat").value="1"; h.node("axial-repeat").handlers.change();
   const exporting=a.exportPNG(); await Promise.resolve(); h.reject(h.last("vector")); await exporting;
   assert.equal(h.exports,0);
+});
+
+test("vector readout lines and endpoint labels follow the grain colors", async () => {
+  const h=harness(), a=h.app; a.setPattern(fixture());
+  a.state.colors=["#112233","#445566"];
+  a.state.atoms=[{position:[0,0],grain:0,layer:0,half_indices:[0,0,0]},
+    {position:[1,0],grain:1,layer:1,half_indices:[1,0,1]}];
+  const reading=a.updateVector();
+  h.reply(h.last("vector"),{lines:[
+    {text:"Cross-grain P1→P2 · G1-A → G2-B · axial +0",grain:null},
+    {text:"G1 current (polar) · full: a₀/2[1 1 2]",grain:0},
+    {text:"G1 current (polar) · in-plane: a₀[0 0 1]",grain:0},
+    {text:"G2 current (polar) · full: a₀/2[1 -1 2]",grain:1},
+    {text:"G2 current (polar) · in-plane: a₀[0 0 1]",grain:1},
+    {text:"Current |Δr|/a₀ = 1.0607 · in-plane |Δxy|/a₀ = 1.0000 · Δz/a₀ = +0.3536",grain:null}],
+    displacement:[1,0,0.3536],length:1.0607,in_plane_length:1,split:true,cross_grain:true,vectors:{}});
+  await reading;
+  assert.equal(h.node("vector-annotation").hidden,false);
+  const colors=text=>h.textColors.filter(d=>d.text===text).map(d=>d.color);
+  await a.exportPNG();
+  assert.equal(h.exports,1);
+  assert.deepEqual(colors("P1"),["#112233"],"P1 takes its grain color");
+  assert.deepEqual(colors("P2"),["#445566"],"P2 takes its grain color");
+  assert.deepEqual(colors("G1 current (polar) · full: a₀/2[1 1 2]"),["#112233"]);
+  assert.deepEqual(colors("G1 current (polar) · in-plane: a₀[0 0 1]"),["#112233"]);
+  assert.deepEqual(colors("G2 current (polar) · full: a₀/2[1 -1 2]"),["#445566"]);
+  assert.deepEqual(colors("Cross-grain P1→P2 · G1-A → G2-B · axial +0"),["#293b59"]);
+  assert.deepEqual(colors("Current |Δr|/a₀ = 1.0607 · in-plane |Δxy|/a₀ = 1.0000 · Δz/a₀ = +0.3536"),["#293b59"]);
+  assert.deepEqual(colors("View Δxy/a₀ = (1.0000, 0.0000)"),["#293b59"],"cross-grain readouts add displayed components");
+  // A later grain color and display rotation apply to the existing measurement.
+  h.node("g1-color").value="#009900"; h.node("g1-color").handlers.input();
+  a.state.displayRotation=90;
+  h.textColors.length=0; h.textDraws.length=0;
+  await a.exportPNG();
+  assert.equal(h.exports,2);
+  assert.deepEqual(colors("G1 current (polar) · full: a₀/2[1 1 2]"),["#009900"]);
+  assert.deepEqual(colors("G2 current (polar) · full: a₀/2[1 -1 2]"),["#445566"]);
+  assert(h.textDraws.includes("View Δxy/a₀ = (0.0000, 1.0000)"));
+  assert(!h.textDraws.includes("View Δxy/a₀ = (1.0000, 0.0000)"));
+});
+
+test("legacy vector replies without readout lines still show the annotation", async () => {
+  const h=harness(), a=h.app; a.setPattern(fixture()); a.state.atoms=atoms();
+  const reading=a.updateVector();
+  h.reply(h.last("vector"),{vectors:{G1:{current_formatted:"a₀[1 0 0]",strained:false}},length:1});
+  await reading;
+  assert.equal(h.node("vector-annotation").hidden,false);
+  await a.exportPNG();
+  assert.equal(h.exports,1);
 });
