@@ -253,11 +253,12 @@ test("Worker downloads resources during NumPy startup and transfers copied Pyodi
     if (message.type === "result") resultReceived.resolve();
   }};
   vm.runInNewContext(source, {self, LatestRequestQueue, loadPyodide: async () => runtime,
-    fetch: async url => { downloads.push(url); return {ok: true, text: async () => "bridge source", arrayBuffer: async () => new ArrayBuffer(4)}; },
+    fetch: async (url, options) => { downloads.push([url, options?.cache]); return {ok: true, text: async () => "bridge source", arrayBuffer: async () => new ArrayBuffer(4)}; },
     Float64Array, Uint8Array, JSON, Promise, Map});
   self.onmessage({data: request(1, "render")});
   await numpyStarted.promise;
-  assert.deepEqual(downloads, ["./web_bridge.py", "./vendor/dichromatic_map.zip"]);
+  assert.deepEqual(downloads, [["./web_bridge.py", "no-cache"], ["./vendor/dichromatic_map.zip", "no-cache"]],
+    "the bridge and the core archive are revalidated so they always match one deployment");
   self.onmessage({data: request(2, "render")});
   numpy.resolve();
   await resultReceived.promise;

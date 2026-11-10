@@ -6,7 +6,9 @@ async function engine() {
   if (!enginePromise) {
     enginePromise = (async () => {
       const read = async (url, binary) => {
-        const response = await fetch(url);
+        // Revalidate with the server so the bridge and the core archive always
+        // come from the same deployment, whatever cache lifetime a CDN assigns.
+        const response = await fetch(url, {cache: "no-cache"});
         if (!response.ok) throw new Error("The app's numerical files could not be loaded.");
         return binary ? response.arrayBuffer() : response.text();
       };
